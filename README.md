@@ -155,7 +155,11 @@ translucency, unusual lighting):
 1. Train a YOLO pill detector and export it with
    `python3 tools/train_pill_yolo.py <data.yaml>` (needs a GPU machine;
    full dataset guidance is in the script's docstring). Output:
-   `PillDetector.mlpackage`, ~6 MB.
+   `PillDetector.mlpackage`, ~6 MB. **[`training/README.md`](training/README.md)
+   is a complete, self-contained work order for doing this in another
+   Claude Code session** — open-data sourcing rules, training, acceptance
+   gates against this repo's test assets, model-card requirement, and
+   headless Xcode installation steps.
 2. Drag `PillDetector.mlpackage` into Xcode, tick the *PillCount* target,
    rebuild. Nothing else — the app discovers the model at launch.
 
@@ -189,6 +193,8 @@ PillCount/                  the iOS app
   UI/                       overlay & HUD views
 tools/                      Python reference pipeline + synthetic test suite
 tools/cpp_test/             Linux/macOS harness for the shipping C++
+training/                   work order + acceptance harness for producing
+                            the optional Core ML model (see training/README.md)
 docs/LIMITATIONS.md         known limitations & accuracy assumptions — read this
 ```
 
