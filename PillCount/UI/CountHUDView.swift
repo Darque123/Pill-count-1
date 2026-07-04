@@ -14,6 +14,9 @@ struct CountHUDView: View {
     let state: CountState
     let isFrozen: Bool
     let manualAdjustment: Int
+    /// Non-nil when the ML detector and the classical cross-check disagree
+    /// (ML count minus classical count) — the pharmacist should verify.
+    var crossCheckDelta: Int? = nil
 
     var body: some View {
         VStack(spacing: 6) {
@@ -38,6 +41,18 @@ struct CountHUDView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
                     .background(.purple.opacity(0.9), in: Capsule())
+                    .foregroundColor(.white)
+            }
+
+            // The two detectors disagree: don't hide it — this is exactly
+            // the frame the pharmacist should freeze and verify by eye.
+            if let delta = crossCheckDelta {
+                Label("cross-check differs (\(delta > 0 ? "+" : "")\(delta)) — verify",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(.red.opacity(0.9), in: Capsule())
                     .foregroundColor(.white)
             }
         }

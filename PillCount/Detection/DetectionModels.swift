@@ -23,8 +23,22 @@ struct DetectionFrame {
     let imageSize: CGSize
     let processingMillis: Double
     let timestamp: Date
+    /// True when `pills` came from the Core ML detector (classical OpenCV
+    /// then ran as a cross-check); false when classical was the only path.
+    var usedML: Bool = false
+    /// The classical pipeline's count when ML was primary — shown to the
+    /// user whenever the two detectors disagree.
+    var crossCheckCount: Int? = nil
 
     var count: Int { pills.count }
+
+    /// Non-nil disagreement between the two detectors (ML mode only).
+    var crossCheckDelta: Int? {
+        guard usedML, let cv = crossCheckCount, cv != pills.count else {
+            return nil
+        }
+        return pills.count - cv
+    }
 }
 
 /// The user-facing counting state produced by `CountSmoother`.

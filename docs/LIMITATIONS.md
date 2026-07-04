@@ -85,14 +85,19 @@ pill type the detector is weak on — calibrate it specifically.
 - All processing is **on-device**; no image or count ever leaves the phone
   unless the user explicitly shares the CSV log.
 
-## If classical CV plateaus
+## If classical CV plateaus: the ML hybrid path (built in)
 
-Heavy overlap (pills on pills) is the main case where this silhouette-based
-approach hits a ceiling. The clean extension point is `DetectionEngine`: a
-lightweight class-agnostic instance segmenter (e.g. a small YOLO variant or
-a distilled Segment-Anything model compiled to Core ML, running fully
-offline) could replace `PillPipeline` as the region proposer for exactly
-those frames — keeping the classical path as the default and the same
-smoothing/UX safety layer on top. Costs to weigh: model size in the app
-bundle, per-frame latency on older devices, and losing the "no training,
-any pill" guarantee unless the model is genuinely class-agnostic.
+The app ships with an optional Core ML detector path (see README, "Optional
+ML detector"): train a YOLO pill detector with `tools/train_pill_yolo.py`,
+drop the exported `PillDetector.mlpackage` into the Xcode project, and the
+app switches to hybrid mode — ML primary on the Neural Engine, classical
+OpenCV as an always-on cross-check with an explicit on-screen disagreement
+warning. A detector trained on real pill photos is substantially more robust
+to coatings, imprints, translucency, and messy lighting than the classical
+heuristics.
+
+What ML does NOT fix: pills stacked underneath other pills are invisible to
+any camera-based method — that remains a workflow rule (single layer on the
+tray) backed by freeze-and-verify. And a trained model is only as general as
+its training data, which is why the classical cross-check stays on and why
+the calibration protocol must be re-run after any model change.

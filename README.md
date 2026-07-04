@@ -146,6 +146,32 @@ Synthetic scenes and one video are not a substitute for broad real-world
 validation — use the in-app calibration mode with your pills, trays, and
 lighting.
 
+## Optional ML detector (hybrid mode)
+
+The app has a built-in **Core ML hybrid path** for higher accuracy across
+pill appearances the classical pipeline struggles with (coatings, imprints,
+translucency, unusual lighting):
+
+1. Train a YOLO pill detector and export it with
+   `python3 tools/train_pill_yolo.py <data.yaml>` (needs a GPU machine;
+   full dataset guidance is in the script's docstring). Output:
+   `PillDetector.mlpackage`, ~6 MB.
+2. Drag `PillDetector.mlpackage` into Xcode, tick the *PillCount* target,
+   rebuild. Nothing else — the app discovers the model at launch.
+
+With the model present, ML becomes the **primary detector** (running on the
+Neural Engine) and the classical OpenCV pipeline keeps running as an
+independent **cross-check**: whenever the two disagree, a red
+"cross-check differs — verify" banner appears so the pharmacist freezes and
+verifies that frame instead of trusting either number blindly. Without the
+model, the app runs classical-only, exactly as before. Everything stays
+on-device and offline in both modes.
+
+Trade-off to know: a trained detector is only as general as its training
+data — it softens the "zero-configuration, any pill" guarantee of the
+classical path, which is why the classical cross-check stays on. Re-run the
+in-app calibration protocol after installing or updating a model.
+
 ## Repository layout
 
 ```
@@ -155,7 +181,9 @@ PillCount/                  the iOS app
   Detection/                ← counting logic, isolated & tunable
     PillPipeline.hpp/.cpp   pure C++ OpenCV pipeline (all parameters here)
     OpenCVWrapper.h/.mm     ObjC++ bridge to Swift
-    DetectionEngine.swift   frame pump (drops frames while busy)
+    MLPillDetector.swift    optional Core ML detector (auto-enabled when a
+                            PillDetector.mlpackage is bundled)
+    DetectionEngine.swift   frame pump; hybrid ML+CV when a model is present
     CountSmoother.swift     temporal anti-flicker / lock state
   Calibration/              accuracy log + calibration UI
   UI/                       overlay & HUD views

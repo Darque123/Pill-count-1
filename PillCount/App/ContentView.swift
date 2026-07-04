@@ -42,7 +42,8 @@ struct ContentView: View {
                     CountHUDView(count: model.displayedCount,
                                  state: model.countState,
                                  isFrozen: model.isFrozen,
-                                 manualAdjustment: model.manualAdjustment)
+                                 manualAdjustment: model.manualAdjustment,
+                                 crossCheckDelta: model.overlayFrame?.crossCheckDelta)
                         .padding(.top, 8)
                     if !model.batches.isEmpty {
                         BottleTotalView(

@@ -17,8 +17,13 @@ final class DetectionEngine {
     var onFrame: ((DetectionFrame) -> Void)?
 
     private let detector: PCPillDetector
+    /// Non-nil when a Core ML model is bundled (see MLPillDetector). ML is
+    /// then the primary detector and classical becomes the cross-check.
+    private let mlDetector = MLPillDetector()
     private let queue = DispatchQueue(label: "pillcount.detection", qos: .userInitiated)
     private let ciContext = CIContext()
+
+    var isMLActive: Bool { mlDetector != nil }
 
     private let stateLock = NSLock()
     private var busy = false
@@ -52,19 +57,29 @@ final class DetectionEngine {
 
         queue.async { [weak self] in
             guard let self else { return }
+            let started = Date()
+            // Classical pipeline always runs — as the sole detector, or as
+            // the cross-check when the ML model is present.
             let result = self.detector.detect(in: pixelBuffer)
+            let classicalPills = result.pills.enumerated().map { index, pill in
+                DetectedPill(
+                    id: index,
+                    contour: pill.contour.map { $0.cgPointValue },
+                    center: pill.center)
+            }
+            let mlPills = self.mlDetector?.detect(in: pixelBuffer)
+
             let frame = DetectionFrame(
-                pills: result.pills.enumerated().map { index, pill in
-                    DetectedPill(
-                        id: index,
-                        contour: pill.contour.map { $0.cgPointValue },
-                        center: pill.center)
-                },
+                pills: mlPills ?? classicalPills,
                 imageSize: CGSize(
                     width: CVPixelBufferGetWidth(pixelBuffer),
                     height: CVPixelBufferGetHeight(pixelBuffer)),
-                processingMillis: result.processingMillis,
-                timestamp: Date())
+                processingMillis: mlPills == nil
+                    ? result.processingMillis
+                    : Date().timeIntervalSince(started) * 1000,
+                timestamp: Date(),
+                usedML: mlPills != nil,
+                crossCheckCount: mlPills != nil ? classicalPills.count : nil)
 
             self.stateLock.lock()
             self.lastProcessedBuffer = pixelBuffer

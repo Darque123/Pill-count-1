@@ -21,6 +21,7 @@
 		D1CE0000000000000000004B /* CalibrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CE0000000000000000002E /* CalibrationView.swift */; };
 		D1CE0000000000000000004C /* DetectionOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CE0000000000000000002F /* DetectionOverlayView.swift */; };
 		D1CE0000000000000000004D /* CountHUDView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CE00000000000000000030 /* CountHUDView.swift */; };
+		D1CE0000000000000000004E /* MLPillDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CE00000000000000000031 /* MLPillDetector.swift */; };
 		D1CE00000000000000000017 /* opencv2 in Frameworks */ = {isa = PBXBuildFile; productRef = D1CE00000000000000000016 /* opencv2 */; };
 /* End PBXBuildFile section */
 
@@ -43,6 +44,7 @@
 		D1CE0000000000000000002E /* CalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationView.swift; sourceTree = "<group>"; };
 		D1CE0000000000000000002F /* DetectionOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetectionOverlayView.swift; sourceTree = "<group>"; };
 		D1CE00000000000000000030 /* CountHUDView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CountHUDView.swift; sourceTree = "<group>"; };
+		D1CE00000000000000000031 /* MLPillDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLPillDetector.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -115,6 +117,7 @@
 				D1CE00000000000000000025 /* DetectionModels.swift */,
 				D1CE00000000000000000026 /* CountSmoother.swift */,
 				D1CE00000000000000000027 /* DetectionEngine.swift */,
+				D1CE00000000000000000031 /* MLPillDetector.swift */,
 			);
 			path = Detection;
 			sourceTree = "<group>";
@@ -225,6 +228,7 @@
 				D1CE0000000000000000004B /* CalibrationView.swift in Sources */,
 				D1CE0000000000000000004C /* DetectionOverlayView.swift in Sources */,
 				D1CE0000000000000000004D /* CountHUDView.swift in Sources */,
+				D1CE0000000000000000004E /* MLPillDetector.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
