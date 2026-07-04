@@ -38,16 +38,84 @@ cv::Mat flattenIllumination(const cv::Mat& gray, const Params& p) {
     return flat;
 }
 
-/// Foreground = pixels deviating from the flattened tray level in luminance
-/// (either direction), saturation, or rim-shading gradient.
+/// Remove non-pill-like components. Pills (and clusters of touching pills)
+/// are solid, reasonably thick blobs; this rejects:
+///   - thin structures (max inscribed radius < min pill radius): gap
+///     slivers, shadow edges, tray ridges, glare streaks;
+///   - sprawling webs (tiny fill ratio of their bounding box): connected
+///     gap networks between clustered pills;
+///   - rings (large hole area relative to own area): the illumination-
+///     flattening halo that surrounds a bright pill cluster on a dark tray
+///     encircles the pills, so its "holes" ARE the pills.
+void dropJunkComponents(cv::Mat& mask, double rMin) {
+    if (cv::countNonZero(mask) == 0) return;
+    cv::Mat dist;
+    cv::distanceTransform(mask, dist, cv::DIST_L2, 5);
+    cv::Mat labels, stats, centroids;
+    int n = cv::connectedComponentsWithStats(mask, labels, stats, centroids,
+                                             8, CV_32S);
+    // Per-component max inscribed radius in one pass.
+    std::vector<float> compMax(static_cast<size_t>(n), 0.f);
+    for (int y = 0; y < labels.rows; ++y) {
+        const int* l = labels.ptr<int>(y);
+        const float* d = dist.ptr<float>(y);
+        for (int x = 0; x < labels.cols; ++x)
+            if (l[x] > 0) compMax[l[x]] = std::max(compMax[l[x]], d[x]);
+    }
+    std::vector<uchar> drop(static_cast<size_t>(n), 0);
+    bool any = false;
+    for (int i = 1; i < n; ++i) {
+        int area = stats.at<int>(i, cv::CC_STAT_AREA);
+        int w = stats.at<int>(i, cv::CC_STAT_WIDTH);
+        int h = stats.at<int>(i, cv::CC_STAT_HEIGHT);
+        double extent = static_cast<double>(area) / std::max(w * h, 1);
+        bool kill = compMax[i] < rMin || extent < 0.2;
+        if (!kill) {
+            int x0 = stats.at<int>(i, cv::CC_STAT_LEFT);
+            int y0 = stats.at<int>(i, cv::CC_STAT_TOP);
+            cv::Mat comp = (labels(cv::Rect(x0, y0, w, h)) == i);
+            std::vector<std::vector<cv::Point>> contours;
+            cv::findContours(comp, contours, cv::RETR_EXTERNAL,
+                             cv::CHAIN_APPROX_SIMPLE);
+            cv::Mat filled = cv::Mat::zeros(comp.size(), CV_8U);
+            cv::drawContours(filled, contours, -1, 255, cv::FILLED);
+            int holeArea = cv::countNonZero(filled) - area;
+            kill = holeArea > 0.35 * area;
+        }
+        if (kill) {
+            drop[i] = 1;
+            any = true;
+        }
+    }
+    if (!any) return;
+    for (int y = 0; y < labels.rows; ++y) {
+        const int* l = labels.ptr<int>(y);
+        uchar* m = mask.ptr<uchar>(y);
+        for (int x = 0; x < labels.cols; ++x)
+            if (l[x] > 0 && drop[l[x]]) m[x] = 0;
+    }
+}
+
+/// Foreground = pixels deviating from the flattened tray level in luminance,
+/// saturation, or rim-shading gradient. The luminance cue is split BY
+/// POLARITY (lighter-than-tray vs darker-than-tray) and each side is
+/// junk-filtered separately before the union: near bright pills the
+/// flattened "tray level" is dragged upward, so the dark gaps between
+/// touching bright pills read as deviation too — as slivers/webs/rings in
+/// the opposite-polarity mask. Filtering per polarity removes them; a
+/// single unsigned mask would glue the cluster into one blob (found on real
+/// footage of white pills on a dark tray).
 cv::Mat binaryMask(const cv::Mat& bgr, const cv::Mat& flat, const Params& p) {
     const cv::Size blurK(p.blurKernel, p.blurKernel);
+    const double rMin =
+        0.5 * std::sqrt(p.minAreaFraction * flat.total() / CV_PI);
 
-    // Cue 1: |luminance - tray| — catches pills lighter AND darker than the
-    // tray in the same frame (a single-polarity Otsu cannot).
+    // Cue 1: |luminance - tray|, split by polarity.
     cv::Mat dev, mask;
     cv::absdiff(flat, cv::Scalar(128), dev);
     cv::GaussianBlur(dev, dev, blurK, 0);
+    cv::Mat flatBlur;
+    cv::GaussianBlur(flat, flatBlur, blurK, 0);
     {
         cv::Mat thresholded;
         double otsu = cv::threshold(dev, thresholded, 0, 255,
@@ -57,7 +125,17 @@ cv::Mat binaryMask(const cv::Mat& bgr, const cv::Mat& flat, const Params& p) {
             // promote sensor noise to foreground.
             mask = cv::Mat::zeros(dev.size(), CV_8U);
         } else {
-            mask = thresholded;
+            cv::Mat lightSide, darkSide, mLight, mDark;
+            cv::compare(flatBlur, 128, lightSide, cv::CMP_GE);
+            cv::bitwise_not(lightSide, darkSide);
+            cv::bitwise_and(thresholded, lightSide, mLight);
+            cv::bitwise_and(thresholded, darkSide, mDark);
+            cv::Mat kOpen = ellipseKernel(p.openKernel);
+            cv::morphologyEx(mLight, mLight, cv::MORPH_OPEN, kOpen);
+            cv::morphologyEx(mDark, mDark, cv::MORPH_OPEN, kOpen);
+            dropJunkComponents(mLight, rMin);
+            dropJunkComponents(mDark, rMin);
+            cv::bitwise_or(mLight, mDark, mask);
         }
     }
 
@@ -71,6 +149,7 @@ cv::Mat binaryMask(const cv::Mat& bgr, const cv::Mat& flat, const Params& p) {
         double otsu = cv::threshold(sat, satMask, 0, 255,
                                     cv::THRESH_BINARY | cv::THRESH_OTSU);
         if (otsu >= p.minSaturation) {
+            dropJunkComponents(satMask, rMin);
             cv::bitwise_or(mask, satMask, mask);
         }
     }
@@ -96,6 +175,31 @@ cv::Mat binaryMask(const cv::Mat& bgr, const cv::Mat& flat, const Params& p) {
                              cv::CHAIN_APPROX_SIMPLE);
             cv::Mat filled = cv::Mat::zeros(edges.size(), CV_8U);
             cv::drawContours(filled, contours, -1, 255, cv::FILLED);
+            // A filled edge-ring can only be a rescued *single* pill. When
+            // many pills touch, their rims connect into one ring and the
+            // fill swallows the background gaps between them — discard any
+            // filled component larger than the max pill area so this cue can
+            // never glue a cluster together (found on real video).
+            const double maxFill = p.maxAreaFraction * filled.total();
+            cv::Mat labels, stats, centroids;
+            int nFill = cv::connectedComponentsWithStats(
+                filled, labels, stats, centroids, 8, CV_32S);
+            std::vector<uchar> keep(static_cast<size_t>(nFill), 255);
+            bool anyDropped = false;
+            for (int i = 1; i < nFill; ++i) {
+                if (stats.at<int>(i, cv::CC_STAT_AREA) > maxFill) {
+                    keep[i] = 0;
+                    anyDropped = true;
+                }
+            }
+            if (anyDropped) {
+                for (int y = 0; y < filled.rows; ++y) {
+                    const int* l = labels.ptr<int>(y);
+                    uchar* f = filled.ptr<uchar>(y);
+                    for (int x = 0; x < filled.cols; ++x)
+                        if (l[x] > 0 && !keep[l[x]]) f[x] = 0;
+                }
+            }
             cv::bitwise_or(mask, filled, mask);
         }
     }
@@ -107,12 +211,21 @@ cv::Mat binaryMask(const cv::Mat& bgr, const cv::Mat& flat, const Params& p) {
 
 /// Marker source: the mask minus strong thin dark valleys (contact shadows
 /// between touching pills), so side-by-side pills seed separate markers.
+/// The depth required is PROPORTIONAL to local brightness so contacts are
+/// found on dark pills too, while shallow score-line grooves (which run
+/// ~15-25% of pill brightness vs ~35-50% for contact shadows, measured on
+/// real footage) are spared everywhere.
 cv::Mat markerMask(const cv::Mat& flat, const cv::Mat& mask, const Params& p) {
     if (!p.valleyAssist) return mask.clone();
-    cv::Mat blackhat, valley, out;
+    cv::Mat blackhat, flatBlur;
     cv::morphologyEx(flat, blackhat, cv::MORPH_BLACKHAT,
                      ellipseKernel(p.valleyKernel));
-    cv::threshold(blackhat, valley, p.valleyThreshold, 255, cv::THRESH_BINARY);
+    cv::GaussianBlur(flat, flatBlur, cv::Size(p.blurKernel, p.blurKernel), 0);
+    cv::Mat required;
+    flatBlur.convertTo(required, CV_8U, p.valleyRatio, 0.0);
+    cv::max(required, static_cast<double>(p.valleyFloor), required);
+    cv::Mat valley, out;
+    cv::compare(blackhat, required, valley, cv::CMP_GE);
     cv::bitwise_not(valley, valley);
     cv::bitwise_and(mask, valley, out);
     return out;

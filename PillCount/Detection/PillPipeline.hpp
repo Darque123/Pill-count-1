@@ -60,15 +60,19 @@ struct Params {
     /// Watershed markers: a pixel seeds "sure foreground" when its distance-
     /// transform value >= distRatio * (local max within markerWindow). The
     /// local-normalized threshold separates touching pills of mixed sizes.
-    double distRatio = 0.55;
+    double distRatio = 0.45;
     double markerWindowFraction = 0.09;   // window = fraction * maxDimension
 
     /// Valley assist: subtract thin dark contact seams (black-hat) from the
-    /// marker mask so side-by-side touching pills seed separate markers.
-    /// Can over-split tablets with a deeply shadowed score line — disable if
-    /// calibration mode shows that dominating your error.
+    /// marker mask so touching pills seed separate markers. The depth
+    /// required scales with local brightness: contact shadows run ~35-50%
+    /// of pill brightness, score-line grooves ~15-25% (measured on real
+    /// footage of scored white caplets), so contacts are cut without
+    /// splitting scored tablets. Disable if calibration mode still shows
+    /// score-line over-splitting on your stock.
     bool valleyAssist = true;
-    int valleyThreshold = 25;
+    double valleyRatio = 0.35;   // required black-hat depth / local level
+    int valleyFloor = 15;        // absolute minimum depth (noise gate)
     int valleyKernel = 7;
 
     /// Cleanup morphology kernel sizes.

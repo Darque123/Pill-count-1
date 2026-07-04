@@ -30,7 +30,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) double distRatio;
 @property (nonatomic) double markerWindowFraction;
 @property (nonatomic) BOOL valleyAssist;
-@property (nonatomic) int valleyThreshold;
+@property (nonatomic) double valleyRatio;
+@property (nonatomic) int valleyFloor;
 @property (nonatomic) int valleyKernel;
 @property (nonatomic) int openKernel;
 @property (nonatomic) int closeKernel;

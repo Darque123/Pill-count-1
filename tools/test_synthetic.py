@@ -31,6 +31,25 @@ def draw_round(img, c, r, color, highlight=True):
                    tuple(min(255, int(v * 1.25) + 20) for v in color), -1, cv2.LINE_AA)
 
 
+def contact_shadow(img, c1, r1, c2, r2, color):
+    """Draw the ambient-occlusion shadow where two convex pills touch.
+    Real touching pills always show this; on real footage it measures
+    ~57+ in black-hat depth (vs ~26-45 for score-line grooves), which is
+    what the pipeline's valley threshold is calibrated against."""
+    c1, c2 = np.array(c1, float), np.array(c2, float)
+    d = c2 - c1
+    dist = np.linalg.norm(d)
+    if dist == 0:
+        return
+    contact = c1 + d * (r1 / (r1 + r2))
+    perp = np.array([-d[1], d[0]]) / dist
+    half = 0.4 * min(r1, r2)
+    p1 = (contact - perp * half).astype(int)
+    p2 = (contact + perp * half).astype(int)
+    shadow = tuple(int(v * 0.5) for v in color)
+    cv2.line(img, tuple(p1), tuple(p2), shadow, 4, cv2.LINE_AA)
+
+
 def draw_caplet(img, c, half_len, r, angle_deg, color):
     a = np.deg2rad(angle_deg)
     d = np.array([np.cos(a), np.sin(a)]) * (half_len - r)
@@ -68,6 +87,12 @@ def scene_touching_cluster():
                         int(cy + 2 * r * 0.98 * np.sin(a))))
     for c in centers:
         draw_round(img, c, r, (70, 70, 225))
+    # contact shadows at every touching pair (physically always present)
+    for i in range(len(centers)):
+        for j in range(i + 1, len(centers)):
+            d2 = (centers[i][0]-centers[j][0])**2 + (centers[i][1]-centers[j][1])**2
+            if d2 <= (2 * r) ** 2:
+                contact_shadow(img, centers[i], r, centers[j], r, (70, 70, 225))
     loose = [(200, 200), (W - 220, 220), (240, H - 200)]
     for c in loose:
         draw_round(img, c, r, (70, 70, 225))
@@ -139,8 +164,10 @@ def scene_mixed_sizes_touching():
     img = tray(color=(150, 155, 160))
     draw_round(img, (300, 300), 22, (250, 250, 252))
     draw_round(img, (300 + 43, 300), 22, (250, 250, 252))   # small touching pair
+    contact_shadow(img, (300, 300), 22, (343, 300), 22, (250, 250, 252))
     draw_round(img, (800, 500), 48, (60, 60, 230))
     draw_round(img, (800 + 94, 500), 48, (60, 60, 230))     # large touching pair
+    contact_shadow(img, (800, 500), 48, (894, 500), 48, (60, 60, 230))
     draw_round(img, (400, 720), 22, (250, 250, 252))
     draw_round(img, (1000, 200), 48, (60, 60, 230))
     return img, 6

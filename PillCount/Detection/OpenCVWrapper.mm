@@ -38,7 +38,8 @@
         _distRatio = d.distRatio;
         _markerWindowFraction = d.markerWindowFraction;
         _valleyAssist = d.valleyAssist;
-        _valleyThreshold = d.valleyThreshold;
+        _valleyRatio = d.valleyRatio;
+        _valleyFloor = d.valleyFloor;
         _valleyKernel = d.valleyKernel;
         _openKernel = d.openKernel;
         _closeKernel = d.closeKernel;
@@ -62,7 +63,8 @@
     p.distRatio = self.distRatio;
     p.markerWindowFraction = self.markerWindowFraction;
     p.valleyAssist = self.valleyAssist;
-    p.valleyThreshold = self.valleyThreshold;
+    p.valleyRatio = self.valleyRatio;
+    p.valleyFloor = self.valleyFloor;
     p.valleyKernel = self.valleyKernel;
     p.openKernel = self.openKernel;
     p.closeKernel = self.closeKernel;

@@ -53,14 +53,19 @@ class Params:
     max_aspect: float = 4.5
     # Watershed markers: a pixel is "sure foreground" when its distance value
     # is at least dist_ratio * (max distance within marker_window px).
-    dist_ratio: float = 0.55
+    dist_ratio: float = 0.45
     marker_window_frac: float = 0.09   # window = frac * max_dim, odd
     # Valley assist: subtract thin dark contact seams (morphological
-    # black-hat) from the mask before the distance transform, so side-by-side
-    # touching pills seed separate markers. Can over-split deeply scored
-    # tablets — disable if that dominates your error in calibration mode.
+    # black-hat) from the mask before the distance transform, so touching
+    # pills seed separate markers. The threshold is PROPORTIONAL to local
+    # brightness: contact shadows between convex pills run ~35-50% of the
+    # pill's brightness while score-line grooves run ~15-25% (measured on
+    # real footage of scored white caplets), so this cuts contacts without
+    # splitting scored tablets — on both bright and dark pills. Disable if
+    # calibration mode shows score-line over-splitting on your stock.
     valley_assist: bool = True
-    valley_thresh: int = 25            # black-hat strength required
+    valley_ratio: float = 0.35         # black-hat depth / local flat level
+    valley_floor: int = 15             # absolute minimum depth (noise gate)
     valley_ksize: int = 7              # black-hat kernel (thin structures)
     # Morphology kernel sizes.
     open_ksize: int = 3
@@ -97,16 +102,65 @@ def _flatten_illumination(gray, p: Params):
     return cv2.divide(gray, bg, scale=128)
 
 
+def _drop_junk_components(mask, r_min):
+    """Remove non-pill-like components. Pills (and clusters of touching
+    pills) are solid, reasonably thick blobs; the artifacts this rejects are:
+      - thin structures (max inscribed radius < min pill radius): gap
+        slivers, shadow edges, tray ridges, glare streaks;
+      - sprawling webs (tiny fill ratio of their bounding box): connected
+        gap networks between clustered pills;
+      - rings (large hole area relative to own area): the illumination-
+        flattening halo that surrounds a bright pill cluster on a dark tray
+        encircles the pills, so its "holes" ARE the pills."""
+    if not mask.any():
+        return mask
+    dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+    for i in range(1, n):
+        area = stats[i, cv2.CC_STAT_AREA]
+        bbox_area = stats[i, cv2.CC_STAT_WIDTH] * stats[i, cv2.CC_STAT_HEIGHT]
+        x, y = stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP]
+        w, h = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
+        sel = labels == i
+        drop = dist[sel].max() < r_min or area / max(bbox_area, 1) < 0.2
+        if not drop:
+            comp = (labels[y:y + h, x:x + w] == i).astype(np.uint8)
+            cnts, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL,
+                                       cv2.CHAIN_APPROX_SIMPLE)
+            filled = np.zeros_like(comp)
+            cv2.drawContours(filled, cnts, -1, 1, cv2.FILLED)
+            hole_area = int(filled.sum()) - area
+            drop = hole_area > 0.35 * area
+        if drop:
+            mask[sel] = 0
+    return mask
+
+
 def _binary_mask(bgr, flat, p: Params):
     """Foreground = pixels deviating from the flattened tray level, in
-    luminance (either direction) or in saturation."""
+    luminance or saturation. The luminance cue is split BY POLARITY
+    (lighter-than-tray vs darker-than-tray) and each side is thin-filtered
+    separately before the union: near bright pills the flattened "tray level"
+    is dragged upward, so dark gaps between touching bright pills read as
+    deviation too — as slivers in the opposite-polarity mask. Filtering per
+    polarity removes them; a single unsigned mask would glue the cluster."""
+    r_min = 0.5 * np.sqrt(p.min_area_frac * flat.size / np.pi)
     dev = cv2.absdiff(flat, 128)
     dev = cv2.GaussianBlur(dev, (p.blur_ksize,) * 2, 0)
+    flat_blur = cv2.GaussianBlur(flat, (p.blur_ksize,) * 2, 0)
     otsu_t, _ = cv2.threshold(dev, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
     if otsu_t < p.min_dev:
         mask = np.zeros_like(dev)      # empty tray: no real signal
     else:
-        _, mask = cv2.threshold(dev, otsu_t, 255, cv2.THRESH_BINARY)
+        _, m_dev = cv2.threshold(dev, otsu_t, 255, cv2.THRESH_BINARY)
+        m_light = cv2.bitwise_and(m_dev, (flat_blur >= 128).astype(np.uint8) * 255)
+        m_dark = cv2.bitwise_and(m_dev, (flat_blur < 128).astype(np.uint8) * 255)
+        k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                           (p.open_ksize,) * 2)
+        m_light = cv2.morphologyEx(m_light, cv2.MORPH_OPEN, k_open)
+        m_dark = cv2.morphologyEx(m_dark, cv2.MORPH_OPEN, k_open)
+        mask = cv2.bitwise_or(_drop_junk_components(m_light, r_min),
+                              _drop_junk_components(m_dark, r_min))
 
     # Colored pills whose luminance matches the tray still pop in saturation.
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
@@ -114,7 +168,7 @@ def _binary_mask(bgr, flat, p: Params):
     sat_t, _ = cv2.threshold(sat, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
     if sat_t >= p.min_sat:
         _, m_sat = cv2.threshold(sat, sat_t, 255, cv2.THRESH_BINARY)
-        mask = cv2.bitwise_or(mask, m_sat)
+        mask = cv2.bitwise_or(mask, _drop_junk_components(m_sat, r_min))
 
     # Rim-shading cue: a pill whose face matches the tray in both brightness
     # and color still shows a shaded rim (it is convex). Take strong Sobel
@@ -133,6 +187,16 @@ def _binary_mask(bgr, flat, p: Params):
                                    cv2.CHAIN_APPROX_SIMPLE)
         filled = np.zeros_like(edges)
         cv2.drawContours(filled, cnts, -1, 255, cv2.FILLED)
+        # A filled edge-ring can only be a rescued *single* pill. When many
+        # pills touch, their rims connect into one ring and the fill swallows
+        # the background gaps between them — discard any filled component
+        # larger than the max pill area so this cue can never glue a cluster
+        # together (found on real video, see docs/LIMITATIONS.md).
+        max_fill = p.max_area_frac * filled.size
+        n_f, fl, fstats, _ = cv2.connectedComponentsWithStats(filled, 8)
+        for i in range(1, n_f):
+            if fstats[i, cv2.CC_STAT_AREA] > max_fill:
+                filled[fl == i] = 0
         mask = cv2.bitwise_or(mask, filled)
 
     k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (p.open_ksize,) * 2)
@@ -144,12 +208,18 @@ def _binary_mask(bgr, flat, p: Params):
 
 def _marker_mask(flat, mask, p: Params):
     """Mask used only for seeding markers: the foreground mask minus strong
-    thin dark valleys (contact shadows between touching pills)."""
+    thin dark valleys (contact shadows between touching pills). The depth
+    required scales with local brightness so contacts are found on dark
+    pills too, while shallow score-line grooves are spared everywhere."""
     if not p.valley_assist:
         return mask
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (p.valley_ksize,) * 2)
     blackhat = cv2.morphologyEx(flat, cv2.MORPH_BLACKHAT, k)
-    _, valley = cv2.threshold(blackhat, p.valley_thresh, 255, cv2.THRESH_BINARY)
+    flat_blur = cv2.GaussianBlur(flat, (p.blur_ksize,) * 2, 0)
+    required = np.maximum(
+        p.valley_floor,
+        (p.valley_ratio * flat_blur.astype(np.float32)).astype(np.uint8))
+    valley = (blackhat >= required).astype(np.uint8) * 255
     return cv2.bitwise_and(mask, cv2.bitwise_not(valley))
 
 

@@ -37,9 +37,21 @@ side-by-side caplets, white-on-light with illumination gradient, glare +
 shadow, mixed sizes touching, dark tray, empty tray) and on 160 randomized
 variations of them — `tools/` re-runs this in one command.
 
-**Not verified here:** accuracy on real pills, real trays, real pharmacy
-lighting, and real phone cameras. Synthetic scenes approximate but do not
-reproduce reality (sensor noise, optics, pill coatings, embossing, dust).
+**Verified on real footage:** a 10-second handheld video of 12 white scored
+caplets on a dark table (several touching, visible score lines — see
+`old/pill1.avi` in [kien-ly/count-drug](https://github.com/kien-ly/count-drug)):
+the pipeline counts **12 on all 308 frames**, and the smoother locks at 12
+within 0.25 s and holds for the whole clip. Reproduce with
+`python3 tools/eval_video.py pill1.avi 12`. This footage drove three real
+fixes the synthetic suite missed (all covered by tests now): the rim-
+gradient fill gluing touching clusters, the flattening halo joining
+opposite-polarity masks, and score-line over-splitting — which is why the
+valley threshold is proportional to local brightness (contact shadows
+measure ~35–50 % of pill brightness, score grooves ~15–25 %).
+
+**Still not verified:** breadth. One real pill type, one tray, one lighting
+setup is a smoke test, not a validation. Real deployment still requires the
+calibration-mode protocol below across your pill types, trays, and lighting.
 
 **Before real-world reliance, run a validation protocol** with the built-in
 calibration mode (checklist button):
