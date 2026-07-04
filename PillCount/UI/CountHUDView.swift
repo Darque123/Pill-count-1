@@ -68,3 +68,59 @@ struct CountHUDView: View {
         }
     }
 }
+
+/// Running multi-tray total for the current bottle, with undo/reset.
+/// Shown whenever at least one tray has been committed.
+struct BottleTotalView: View {
+    let total: Int
+    let trays: Int
+    let onUndo: () -> Void
+    let onReset: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("BOTTLE TOTAL")
+                    .font(.caption2.weight(.bold))
+                    .foregroundColor(.white.opacity(0.7))
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("\(total)")
+                        .font(.system(size: 34, weight: .bold,
+                                      design: .rounded))
+                        .monospacedDigit()
+                        .foregroundColor(.white)
+                    Text("\(trays) \(trays == 1 ? "tray" : "trays")")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.7))
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            Button(action: onUndo) {
+                Image(systemName: "arrow.uturn.backward")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 38, height: 38)
+                    .background(.white.opacity(0.15), in: Circle())
+            }
+            .accessibilityLabel("Remove last tray from total")
+
+            Button(action: onReset) {
+                Image(systemName: "trash")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 38, height: 38)
+                    .background(.white.opacity(0.15), in: Circle())
+            }
+            .accessibilityLabel("Reset bottle total")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.black.opacity(0.6),
+                    in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16)
+            .strokeBorder(.white.opacity(0.25)))
+        .padding(.horizontal, 24)
+    }
+}

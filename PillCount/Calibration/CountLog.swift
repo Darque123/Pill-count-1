@@ -15,6 +15,8 @@ struct CountLogEntry: Codable, Identifiable {
     enum Kind: String, Codable {
         case override      // pharmacist used +/- to correct a count
         case calibration   // user entered the known-true count for a frame
+        case batch         // a tray count committed to a bottle total
+        case batchUndo     // a committed tray removed from the total
     }
 
     var id = UUID()
@@ -73,6 +75,27 @@ final class CountLog: ObservableObject {
                                      adjustment: adjustment,
                                      trueCount: trueCount,
                                      note: note.isEmpty ? nil : note))
+        save()
+    }
+
+    /// Audit trail for the multi-tray workflow: one entry per tray added to
+    /// a bottle total, including any manual correction that was in effect.
+    func recordBatch(machineCount: Int, adjustment: Int,
+                     trayIndex: Int, runningTotal: Int) {
+        entries.append(CountLogEntry(
+            kind: .batch,
+            machineCount: machineCount,
+            adjustment: adjustment,
+            note: "tray #\(trayIndex) → bottle total \(runningTotal)"))
+        save()
+    }
+
+    func recordBatchUndo(count: Int, runningTotal: Int) {
+        entries.append(CountLogEntry(
+            kind: .batchUndo,
+            machineCount: count,
+            adjustment: 0,
+            note: "removed last tray → bottle total \(runningTotal)"))
         save()
     }
 

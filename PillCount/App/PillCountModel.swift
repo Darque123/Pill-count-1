@@ -19,6 +19,12 @@ final class PillCountModel: ObservableObject {
         let frame: DetectionFrame
     }
 
+    /// One tray count committed to the running bottle total.
+    struct Batch: Identifiable {
+        let id = UUID()
+        let count: Int
+    }
+
     let camera = CameraManager()
     let log = CountLog()
 
@@ -30,6 +36,9 @@ final class PillCountModel: ObservableObject {
     @Published private(set) var frozen: FrozenCapture?
     /// Manual +/- correction applied on top of a frozen count.
     @Published private(set) var manualAdjustment = 0
+    /// Tray counts committed to the current bottle (multi-tray workflow:
+    /// count a tray, add it, pour, count the next tray…).
+    @Published private(set) var batches: [Batch] = []
 
     private let engine = DetectionEngine()
     private var smoother = CountSmoother()
@@ -89,6 +98,37 @@ final class PillCountModel: ObservableObject {
         smoother.reset()
         countState = .searching
         engine.setPaused(false)
+    }
+
+    // MARK: - Multi-tray bottle total
+
+    var totalCount: Int { batches.reduce(0) { $0 + $1.count } }
+
+    /// Commit the verified frozen count to the running bottle total, then
+    /// resume live counting for the next tray. Requiring a frozen frame
+    /// means every committed tray was inspectable (outlines + still image)
+    /// before it entered the total.
+    func addFrozenCountToTotal() {
+        guard let frozen else { return }
+        let finalCount = frozen.frame.count + manualAdjustment
+        batches.append(Batch(count: finalCount))
+        log.recordBatch(machineCount: frozen.frame.count,
+                        adjustment: manualAdjustment,
+                        trayIndex: batches.count,
+                        runningTotal: totalCount)
+        unfreeze()
+    }
+
+    /// Remove the most recently added tray (e.g. it was added by mistake).
+    func undoLastBatch() {
+        guard !batches.isEmpty else { return }
+        let removed = batches.removeLast()
+        log.recordBatchUndo(count: removed.count, runningTotal: totalCount)
+    }
+
+    /// Clear the total to start a new bottle.
+    func resetTotal() {
+        batches.removeAll()
     }
 
     // MARK: - Manual override

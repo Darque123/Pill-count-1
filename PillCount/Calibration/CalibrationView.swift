@@ -107,7 +107,7 @@ private struct LogEntryRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
-                Text(entry.kind == .calibration ? "Check" : "Override")
+                Text(title)
                     .font(.subheadline.weight(.semibold))
                 Spacer()
                 Text(entry.date, style: .date)
@@ -127,10 +127,31 @@ private struct LogEntryRow: View {
                      + "\(entry.adjustment > 0 ? "+" : "")\(entry.adjustment)")
                     .font(.caption)
                     .foregroundColor(.orange)
+            case .batch:
+                Text("added \(entry.machineCount + entry.adjustment) pills"
+                     + (entry.adjustment != 0
+                        ? " (counted \(entry.machineCount), adjusted "
+                          + "\(entry.adjustment > 0 ? "+" : "")\(entry.adjustment))"
+                        : ""))
+                    .font(.caption)
+                    .foregroundColor(.blue)
+            case .batchUndo:
+                Text("removed \(entry.machineCount) pills")
+                    .font(.caption)
+                    .foregroundColor(.orange)
             }
             if let note = entry.note {
                 Text(note).font(.caption2).foregroundColor(.secondary)
             }
+        }
+    }
+
+    private var title: String {
+        switch entry.kind {
+        case .calibration: return "Check"
+        case .override: return "Override"
+        case .batch: return "Tray added"
+        case .batchUndo: return "Tray removed"
         }
     }
 }

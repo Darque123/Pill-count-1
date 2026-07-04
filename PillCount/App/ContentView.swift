@@ -11,6 +11,7 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var model = PillCountModel()
     @State private var showCalibration = false
+    @State private var showResetConfirmation = false
 
     var body: some View {
         ZStack {
@@ -37,15 +38,34 @@ struct ContentView: View {
                 }
                 .ignoresSafeArea()
 
-                VStack {
+                VStack(spacing: 10) {
                     CountHUDView(count: model.displayedCount,
                                  state: model.countState,
                                  isFrozen: model.isFrozen,
                                  manualAdjustment: model.manualAdjustment)
                         .padding(.top, 8)
+                    if !model.batches.isEmpty {
+                        BottleTotalView(
+                            total: model.totalCount,
+                            trays: model.batches.count,
+                            onUndo: { model.undoLastBatch() },
+                            onReset: { showResetConfirmation = true })
+                    }
                     Spacer()
+                    if model.isFrozen {
+                        addToTotalButton
+                    }
                     controlBar
                         .padding(.bottom, 12)
+                }
+                .confirmationDialog(
+                    "Reset the bottle total of \(model.totalCount) pills?",
+                    isPresented: $showResetConfirmation,
+                    titleVisibility: .visible)
+                {
+                    Button("Reset total", role: .destructive) {
+                        model.resetTotal()
+                    }
                 }
             }
         }
@@ -58,6 +78,24 @@ struct ContentView: View {
     }
 
     // MARK: - Controls
+
+    /// Commits the verified frozen count to the running bottle total and
+    /// resumes live counting for the next tray. Only reachable while frozen,
+    /// so every tray in the total was inspectable before being added.
+    private var addToTotalButton: some View {
+        Button(action: { model.addFrozenCountToTotal() }) {
+            Label("Add \(model.displayedCount ?? 0) to total",
+                  systemImage: "plus.circle.fill")
+                .font(.title3.weight(.bold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 13)
+                .background(.green, in: Capsule())
+                .shadow(color: .black.opacity(0.4), radius: 5)
+        }
+        .accessibilityHint("Adds this tray's count to the bottle total and "
+                           + "resumes counting")
+    }
 
     private var controlBar: some View {
         HStack(spacing: 20) {

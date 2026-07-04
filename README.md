@@ -63,6 +63,13 @@ PillPipeline.hpp / .cpp     Pure C++ detection pipeline (no Apple deps) —
 - **Manual override** (+/− while frozen) — corrects an edge case. Every
   override is logged with the machine count so systematic detector errors are
   visible in the accuracy record.
+- **Multi-tray totals** — for counts larger than one tray: freeze and verify
+  a tray, tap **"Add N to total"**, pour the pills into the bottle, lay out
+  the next tray, and repeat. The bottle total and tray count stay on screen,
+  with undo-last-tray and reset (confirmation required). Every committed
+  tray is written to the audit log with its machine count and any manual
+  adjustment. Requiring a frozen, inspectable frame before a tray can enter
+  the total is deliberate — nothing joins the total unverified.
 - **Accuracy / calibration mode** (checklist button) — freeze a frame, count
   the pills by hand, enter the true count; the app records its own error.
   The stats panel aggregates checks (exact-count rate, mean absolute error,
