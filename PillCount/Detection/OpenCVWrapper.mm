@@ -25,7 +25,7 @@
         // Single source of truth for defaults: the C++ Params struct.
         pillcount::Params d;
         _maxDimension = d.maxDimension;
-        _bgBlurFraction = d.bgBlurFraction;
+        _bgSmoothFraction = d.bgSmoothFraction;
         _blurKernel = d.blurKernel;
         _minDeviation = d.minDeviation;
         _minSaturation = d.minSaturation;
@@ -41,6 +41,7 @@
         _valleyRatio = d.valleyRatio;
         _valleyFloor = d.valleyFloor;
         _valleyKernel = d.valleyKernel;
+        _minBoundaryGrad = d.minBoundaryGrad;
         _openKernel = d.openKernel;
         _closeKernel = d.closeKernel;
     }
@@ -50,7 +51,7 @@
 - (pillcount::Params)cppParams {
     pillcount::Params p;
     p.maxDimension = self.maxDimension;
-    p.bgBlurFraction = self.bgBlurFraction;
+    p.bgSmoothFraction = self.bgSmoothFraction;
     p.blurKernel = self.blurKernel;
     p.minDeviation = self.minDeviation;
     p.minSaturation = self.minSaturation;
@@ -66,6 +67,7 @@
     p.valleyRatio = self.valleyRatio;
     p.valleyFloor = self.valleyFloor;
     p.valleyKernel = self.valleyKernel;
+    p.minBoundaryGrad = self.minBoundaryGrad;
     p.openKernel = self.openKernel;
     p.closeKernel = self.closeKernel;
     return p;

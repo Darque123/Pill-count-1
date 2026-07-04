@@ -6,19 +6,23 @@ tune parameters against test images before/without touching the Swift code.
 
 Pipeline overview
 -----------------
-1.  Downscale to a working resolution (max_dim).
+1.  Resize to the working resolution (downscale big frames; upscale tiny
+    inputs, capped 5x, so kernels stay proportional to pill sizes).
 2.  Illumination flattening: divide grayscale by a heavily blurred copy so
-    the tray maps to a uniform ~128 regardless of lighting gradients/shadows.
-3.  Foreground mask = |flattened - 128| over an Otsu threshold (catches pills
-    both lighter AND darker than the tray in the same frame), OR'd with a
-    saturation mask (catches colored pills whose luminance matches the tray).
-4.  Morphological open/close to clean noise.
-5.  Watershed markers from the distance transform, thresholded adaptively
-    against the local neighborhood max (separates touching pills of mixed
-    sizes). Dark "contact seams" between touching pills are subtracted before
-    the distance transform so side-by-side pills seed separate markers.
-6.  Watershed on the color frame; per-region contour extraction; filter by
-    area / solidity / aspect ratio.
+    the tray maps to a uniform ~128 regardless of lighting gradients,
+    soft shadows, and reflected-light glow.
+3.  Multi-cue foreground mask: luminance deviation split BY POLARITY
+    (lighter/darker than tray) with per-polarity junk filtering (thin
+    slivers, sprawling webs, halo rings, soft-edged shadow fragments), OR
+    saturation (color-only pills, judged sharp in the saturation channel),
+    OR rim-gradient rings filled and capped at single-pill area.
+4.  Watershed markers from the distance transform thresholded against the
+    local neighborhood max (mixed sizes), on a marker mask with contact
+    shadows cut out (proportional-depth valley test spares score lines;
+    suppressed near specular glare). Every mask component is guaranteed a
+    marker.
+5.  Watershed on the color frame; regions clipped to the mask; contours
+    filtered by area / solidity / aspect / frame-border contact.
 """
 import cv2
 import numpy as np
@@ -30,7 +34,7 @@ class Params:
     # Working resolution: frames are downscaled so max(w, h) <= this.
     max_dim: int = 640
     # Illumination flattening: background blur kernel as fraction of max_dim.
-    bg_blur_frac: float = 0.25
+    bg_smooth_frac: float = 0.25
     # Pre-threshold blur kernel (odd).
     blur_ksize: int = 5
     # Deviation floor: if Otsu picks a threshold below this, the frame is
@@ -66,7 +70,13 @@ class Params:
     valley_assist: bool = True
     valley_ratio: float = 0.35         # black-hat depth / local flat level
     valley_floor: int = 15             # absolute minimum depth (noise gate)
-    valley_ksize: int = 7              # black-hat kernel (thin structures)
+    valley_ksize: int = 9              # black-hat kernel: large enough to
+    # span shadow-junction zones in tight clusters, small enough not to
+    # deepen the response to score-line grooves on real pills
+    # Minimum median gray-gradient along a mask component's boundary.
+    # Physical objects have crisp silhouettes (pills measure 40-430);
+    # penumbra fragments of cast shadows measure 5-15.
+    min_boundary_grad: int = 25
     # Morphology kernel sizes.
     open_ksize: int = 3
     close_ksize: int = 3
@@ -95,23 +105,36 @@ def _odd(n):
 
 
 def _flatten_illumination(gray, p: Params):
-    """Divide by a heavily blurred copy: tray -> ~128, independent of lighting
-    gradients and soft shadows."""
-    k = _odd(max(gray.shape) * p.bg_blur_frac)
+    """Divide by a heavily blurred copy: the tray maps to ~128, independent
+    of lighting gradients, soft shadows, and smooth reflected-light glow
+    (all of which a smooth estimator correctly treats as background).
+
+    Known trade-off, kept deliberately: when pills cover most of the FRAME
+    (extreme close-up), the estimate is dragged toward the pills and their
+    interiors flatten away. That regime is out of spec for the app (the
+    camera views the whole tray); a density-proof morphological background
+    was tried and rejected — it misreads smooth illumination structure and
+    inter-pill tray as objects, which broke real-footage accuracy."""
+    k = _odd(max(gray.shape) * p.bg_smooth_frac)
     bg = cv2.GaussianBlur(gray, (k, k), 0)
     return cv2.divide(gray, bg, scale=128)
 
 
-def _drop_junk_components(mask, r_min):
+def _drop_junk_components(mask, r_min, boundary_grad, min_boundary_grad):
     """Remove non-pill-like components. Pills (and clusters of touching
-    pills) are solid, reasonably thick blobs; the artifacts this rejects are:
+    pills) are solid, reasonably thick blobs with SHARP silhouettes; the
+    artifacts this rejects are:
       - thin structures (max inscribed radius < min pill radius): gap
         slivers, shadow edges, tray ridges, glare streaks;
       - sprawling webs (tiny fill ratio of their bounding box): connected
         gap networks between clustered pills;
       - rings (large hole area relative to own area): the illumination-
         flattening halo that surrounds a bright pill cluster on a dark tray
-        encircles the pills, so its "holes" ARE the pills."""
+        encircles the pills, so its "holes" ARE the pills;
+      - soft-edged blobs (median gray-image gradient along the component
+        boundary below min_boundary_grad): penumbra fragments of cast
+        shadows. A physical object always has a crisp silhouette (measured:
+        real/synthetic pills 40-430, shadow-edge strips 5-15)."""
     if not mask.any():
         return mask
     dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
@@ -126,11 +149,15 @@ def _drop_junk_components(mask, r_min):
         if not drop:
             comp = (labels[y:y + h, x:x + w] == i).astype(np.uint8)
             cnts, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL,
-                                       cv2.CHAIN_APPROX_SIMPLE)
+                                       cv2.CHAIN_APPROX_NONE)
             filled = np.zeros_like(comp)
             cv2.drawContours(filled, cnts, -1, 1, cv2.FILLED)
             hole_area = int(filled.sum()) - area
             drop = hole_area > 0.35 * area
+            if not drop:
+                pts = np.vstack([c.reshape(-1, 2) for c in cnts])
+                edge = boundary_grad[pts[:, 1] + y, pts[:, 0] + x]
+                drop = float(np.median(edge)) < min_boundary_grad
         if drop:
             mask[sel] = 0
     return mask
@@ -145,6 +172,14 @@ def _binary_mask(bgr, flat, p: Params):
     deviation too — as slivers in the opposite-polarity mask. Filtering per
     polarity removes them; a single unsigned mask would glue the cluster."""
     r_min = 0.5 * np.sqrt(p.min_area_frac * flat.size / np.pi)
+    # Gray-image gradient used by the junk filter's silhouette-sharpness
+    # test (computed on gray, not flat, so background-estimation artifacts
+    # cannot fake sharpness).
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    gblur = cv2.GaussianBlur(gray, (3, 3), 0)
+    ggx = cv2.Sobel(gblur, cv2.CV_32F, 1, 0, ksize=3)
+    ggy = cv2.Sobel(gblur, cv2.CV_32F, 0, 1, ksize=3)
+    boundary_grad = cv2.magnitude(ggx, ggy)
     dev = cv2.absdiff(flat, 128)
     dev = cv2.GaussianBlur(dev, (p.blur_ksize,) * 2, 0)
     flat_blur = cv2.GaussianBlur(flat, (p.blur_ksize,) * 2, 0)
@@ -159,8 +194,11 @@ def _binary_mask(bgr, flat, p: Params):
                                            (p.open_ksize,) * 2)
         m_light = cv2.morphologyEx(m_light, cv2.MORPH_OPEN, k_open)
         m_dark = cv2.morphologyEx(m_dark, cv2.MORPH_OPEN, k_open)
-        mask = cv2.bitwise_or(_drop_junk_components(m_light, r_min),
-                              _drop_junk_components(m_dark, r_min))
+        mask = cv2.bitwise_or(
+            _drop_junk_components(m_light, r_min, boundary_grad,
+                                  p.min_boundary_grad),
+            _drop_junk_components(m_dark, r_min, boundary_grad,
+                                  p.min_boundary_grad))
 
     # Colored pills whose luminance matches the tray still pop in saturation.
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
@@ -168,7 +206,14 @@ def _binary_mask(bgr, flat, p: Params):
     sat_t, _ = cv2.threshold(sat, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
     if sat_t >= p.min_sat:
         _, m_sat = cv2.threshold(sat, sat_t, 255, cv2.THRESH_BINARY)
-        mask = cv2.bitwise_or(mask, _drop_junk_components(m_sat, r_min))
+        # A color-only pill can be luminance-invisible; its silhouette
+        # sharpness must be judged in the channel that detected it.
+        sgx = cv2.Sobel(sat, cv2.CV_32F, 1, 0, ksize=3)
+        sgy = cv2.Sobel(sat, cv2.CV_32F, 0, 1, ksize=3)
+        sat_grad = cv2.magnitude(sgx, sgy)
+        mask = cv2.bitwise_or(mask, _drop_junk_components(
+            m_sat, r_min, cv2.max(boundary_grad, sat_grad),
+            p.min_boundary_grad))
 
     # Rim-shading cue: a pill whose face matches the tray in both brightness
     # and color still shows a shaded rim (it is convex). Take strong Sobel
@@ -180,6 +225,11 @@ def _binary_mask(bgr, flat, p: Params):
     grad_t, _ = cv2.threshold(grad, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
     if grad_t >= p.min_grad:
         _, edges = cv2.threshold(grad, grad_t, 255, cv2.THRESH_BINARY)
+        # Sobel/morphology border junk would otherwise close into rings that
+        # touch the frame edge and grow stalks on nearby pills.
+        m = p.grad_close_ksize
+        edges[:m, :] = 0; edges[-m:, :] = 0
+        edges[:, :m] = 0; edges[:, -m:] = 0
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
                                       (p.grad_close_ksize,) * 2)
         edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, k)
@@ -220,6 +270,20 @@ def _marker_mask(flat, mask, p: Params):
         p.valley_floor,
         (p.valley_ratio * flat_blur.astype(np.float32)).astype(np.uint8))
     valley = (blackhat >= required).astype(np.uint8) * 255
+    # Close small gaps where a cut tapers off (anti-aliasing, junctions):
+    # joining existing cut segments adds no new cuts, so this cannot
+    # introduce score-line over-splitting.
+    valley = cv2.morphologyEx(valley, cv2.MORPH_CLOSE,
+                              cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                                        (5, 5)))
+    # Specular glare is far brighter than any pill surface; the black-hat
+    # fires in a ring AROUND a glare spot (the ordinary pill surface is
+    # "deep" relative to the glare), which would carve a false island out
+    # of the pill. Suppress valley cuts near saturated-bright pixels.
+    bright = (flat_blur >= 220).astype(np.uint8) * 255
+    bright = cv2.dilate(bright, cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (p.valley_ksize,) * 2))
+    valley = cv2.bitwise_and(valley, cv2.bitwise_not(bright))
     return cv2.bitwise_and(mask, cv2.bitwise_not(valley))
 
 
@@ -275,9 +339,17 @@ def _split_touching(bgr, mask, marker_src, p: Params):
 def detect(bgr, p: Params = None) -> Result:
     p = p or Params()
     h, w = bgr.shape[:2]
-    scale = min(1.0, p.max_dim / max(h, w))
-    work = cv2.resize(bgr, (int(w * scale), int(h * scale)),
-                      interpolation=cv2.INTER_AREA) if scale < 1.0 else bgr.copy()
+    # Resize to the working resolution in BOTH directions: downscale large
+    # camera frames for speed, and upscale small images (capped at 5x) so
+    # kernel sizes stay proportional to pill sizes — on a tiny input the
+    # fixed kernels would otherwise dwarf the pills and shred the masks.
+    scale = min(p.max_dim / max(h, w), 5.0)
+    if scale != 1.0:
+        interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC
+        work = cv2.resize(bgr, (int(w * scale), int(h * scale)),
+                          interpolation=interp)
+    else:
+        work = bgr.copy()
 
     gray = cv2.cvtColor(work, cv2.COLOR_BGR2GRAY)
     flat = _flatten_illumination(gray, p)
@@ -289,13 +361,24 @@ def detect(bgr, p: Params = None) -> Result:
     min_a, max_a = p.min_area_frac * total_px, p.max_area_frac * total_px
     res = Result(work_size=(work.shape[1], work.shape[0]))
 
+    wh, ww = work.shape[:2]
     for m in range(2, n_markers + 1):     # label 1 = background
-        region = (markers == m).astype(np.uint8)
+        # Clip to the foreground mask: watershed can flood a region into
+        # background it should not own (e.g. border artifacts of the
+        # morphological background estimate); pixels without foreground
+        # evidence must not shape or disqualify a pill.
+        region = ((markers == m) & (mask > 0)).astype(np.uint8)
         cnts, _ = cv2.findContours(region, cv2.RETR_EXTERNAL,
                                    cv2.CHAIN_APPROX_SIMPLE)
         if not cnts:
             continue
         c = max(cnts, key=cv2.contourArea)
+        # A region touching the frame border is a clipped pill (uncountable
+        # by definition) or a morphology border artifact — never count it.
+        # The app's guidance: keep the whole tray in view with margin.
+        x, y, bw, bh = cv2.boundingRect(c)
+        if x <= 1 or y <= 1 or x + bw >= ww - 1 or y + bh >= wh - 1:
+            continue
         area = cv2.contourArea(c)
         if area < min_a or area > max_a:
             continue

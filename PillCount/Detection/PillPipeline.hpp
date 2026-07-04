@@ -21,14 +21,16 @@ namespace pillcount {
 /// synthetic hard-case suite in tools/test_synthetic.py (touching clusters,
 /// white-on-white, glare, shadows, mixed sizes).
 struct Params {
-    /// Frames are downscaled so max(width, height) <= maxDimension before
-    /// processing. Lower = faster, higher = resolves smaller pills.
+    /// Frames are resized so max(width, height) == maxDimension before
+    /// processing (downscaled for speed; small inputs upscaled, capped at
+    /// 5x, so kernel sizes stay proportional to pill sizes).
     int maxDimension = 640;
 
     /// Illumination flattening: background estimated with a Gaussian blur of
-    /// kernel size (bgBlurFraction * maxDimension). Removes lighting
-    /// gradients and soft shadows so the tray maps to a uniform gray.
-    double bgBlurFraction = 0.25;
+    /// kernel size (bgSmoothFraction * maxDimension). Removes lighting
+    /// gradients, soft shadows, and smooth reflected-light glow so the tray
+    /// maps to a uniform gray.
+    double bgSmoothFraction = 0.25;
 
     /// Pre-threshold Gaussian blur kernel (odd).
     int blurKernel = 5;
@@ -73,7 +75,14 @@ struct Params {
     bool valleyAssist = true;
     double valleyRatio = 0.35;   // required black-hat depth / local level
     int valleyFloor = 15;        // absolute minimum depth (noise gate)
-    int valleyKernel = 7;
+    int valleyKernel = 9;        // must span shadow-junction zones in tight
+                                 // clusters without deepening the response
+                                 // to score-line grooves
+
+    /// Minimum median gray-image gradient along a mask component's boundary.
+    /// Physical objects have crisp silhouettes (pills measure 40-430);
+    /// penumbra fragments of cast shadows measure 5-15.
+    int minBoundaryGrad = 25;
 
     /// Cleanup morphology kernel sizes.
     int openKernel = 3;

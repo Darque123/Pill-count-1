@@ -17,7 +17,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// PillPipeline.hpp — see that file for per-parameter documentation.
 @interface PCDetectorParams : NSObject
 @property (nonatomic) int maxDimension;
-@property (nonatomic) double bgBlurFraction;
+@property (nonatomic) double bgSmoothFraction;
 @property (nonatomic) int blurKernel;
 @property (nonatomic) int minDeviation;
 @property (nonatomic) int minSaturation;
@@ -33,6 +33,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) double valleyRatio;
 @property (nonatomic) int valleyFloor;
 @property (nonatomic) int valleyKernel;
+@property (nonatomic) int minBoundaryGrad;
 @property (nonatomic) int openKernel;
 @property (nonatomic) int closeKernel;
 @end

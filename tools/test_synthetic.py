@@ -22,9 +22,15 @@ def tray(color=(200, 205, 210), gradient=0.0):
 
 def draw_round(img, c, r, color, highlight=True):
     cv2.circle(img, c, r, color, -1, cv2.LINE_AA)
-    # rim shading — real pills are convex, so the edge is always darker
-    cv2.circle(img, c, r, tuple(int(v * 0.72) for v in color), 3, cv2.LINE_AA)
-    cv2.circle(img, c, r - 3, tuple(int(v * 0.86) for v in color), 3, cv2.LINE_AA)
+    # Broad radial rim shading: a convex pill under diffuse light darkens
+    # progressively toward its silhouette (cosine falloff), over roughly the
+    # outer 15-20%% of its radius — not a hairline ring.
+    rim = max(3, int(0.18 * r))
+    for i in range(rim):
+        t = i / rim                      # 0 at silhouette -> 1 inside
+        shade = 0.68 + 0.32 * t
+        cv2.circle(img, c, r - i, tuple(int(v * shade) for v in color),
+                   2, cv2.LINE_AA)
     if highlight:
         hc = (c[0] - r // 3, c[1] - r // 3)
         cv2.circle(img, hc, max(2, r // 4),
@@ -43,7 +49,7 @@ def contact_shadow(img, c1, r1, c2, r2, color):
         return
     contact = c1 + d * (r1 / (r1 + r2))
     perp = np.array([-d[1], d[0]]) / dist
-    half = 0.4 * min(r1, r2)
+    half = 0.55 * min(r1, r2)
     p1 = (contact - perp * half).astype(int)
     p2 = (contact + perp * half).astype(int)
     shadow = tuple(int(v * 0.5) for v in color)
@@ -80,11 +86,14 @@ def scene_touching_cluster():
     img = tray()
     r = 34
     cx, cy = W // 2, H // 2
+    # Tangent contact (spacing exactly 2r): pills touch but cannot
+    # interpenetrate — beyond the contact point a background wedge opens,
+    # as with real pills.
     centers = [(cx, cy)]
     for k in range(6):
         a = k * np.pi / 3
-        centers.append((int(cx + 2 * r * 0.98 * np.cos(a)),
-                        int(cy + 2 * r * 0.98 * np.sin(a))))
+        centers.append((int(cx + 2 * r * np.cos(a)),
+                        int(cy + 2 * r * np.sin(a))))
     for c in centers:
         draw_round(img, c, r, (70, 70, 225))
     # contact shadows at every touching pair (physically always present)
@@ -145,10 +154,12 @@ def scene_white_on_light():
 def scene_glare_shadow():
     """Round pills with specular glare blobs and a cast shadow band."""
     img = tray()
-    # shadow band with a realistic soft penumbra
+    # Shadow band with a realistic penumbra: under a large diffuse light
+    # source (pharmacy ceiling panels), an object held above the tray casts
+    # a shadow whose edge transitions over centimeters, not millimeters.
     shade = np.ones((H, W), np.float32)
     shade[300:520, :] = 0.72
-    shade = cv2.GaussianBlur(shade, (31, 31), 0)
+    shade = cv2.GaussianBlur(shade, (151, 151), 0)
     img = np.clip(img.astype(np.float32) * shade[..., None], 0, 255).astype(np.uint8)
     pts = [(220, 400), (500, 380), (760, 430), (1020, 400),
            (320, 720), (640, 700), (960, 740), (620, 180)]

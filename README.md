@@ -133,12 +133,14 @@ g++ -std=c++17 -O2 tools/cpp_test/main.cpp PillCount/Detection/PillPipeline.cpp 
 /tmp/pill_test tools/fixtures
 ```
 
-Current status: **8/8 scenes exact, 160/160 exact across 20 randomized
-scene variations**, at ~40 ms/frame on a desktop CPU at 640 px working
-resolution. On real handheld footage of 12 white scored caplets on a dark
-table (several touching), the pipeline counts **12 on all 308 frames** and
-locks within 0.25 s — reproduce with `tools/eval_video.py` (details and
-source of the footage in [docs/LIMITATIONS.md](docs/LIMITATIONS.md)).
+Current status: **8/8 scenes exact, 155/160 across 20 randomized scene
+variations** (the only miss: a hexagonally packed 7-pill cluster at −1 in
+5 variations, always visible as a merged outline), at ~45 ms/frame on a
+desktop CPU at 640 px working resolution. On real handheld footage of 12
+white scored caplets on a dark table (several touching), the smoother
+locks at 12 within 0.25 s and **never locks at a wrong value** — reproduce
+with `tools/eval_video.py` (details and source of the footage in
+[docs/LIMITATIONS.md](docs/LIMITATIONS.md)).
 
 Synthetic scenes and one video are not a substitute for broad real-world
 validation — use the in-app calibration mode with your pills, trays, and

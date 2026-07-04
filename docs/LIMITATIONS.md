@@ -27,6 +27,7 @@ The pipeline was designed and tested for the standard pharmacy workflow:
 | **Pills at the frame edge** | A pill partially out of frame may be filtered out by shape checks or counted with a clipped outline | Keep the whole tray in view with margin |
 | **Transparent / translucent capsules** | Weak contrast in all three cues (luminance, saturation, rim) can drop them | Dark tray recommended; validate in calibration mode |
 | **Very small pills at high camera distance** | Below the minimum-area filter at the 640 px working resolution | Move closer, or raise `maxDimension` / lower `minAreaFraction` (costs frames per second) |
+| **Pills filling most of the frame** (extreme close-up / dense macro shot) | The background estimate is dragged toward the pills, eroding their masks — undercounts, ragged outlines | Frame the whole tray, not a pill pile; the camera's minimum focus distance makes this hard to hit accidentally in the app |
 | **Motion blur** | Counts during motion are unreliable — by design the count won't lock while values disagree | Wait for LOCKED ✓; it requires 8 consecutive agreeing frames on a steady scene |
 
 ## Accuracy claims — what has and hasn't been verified
@@ -40,14 +41,17 @@ variations of them — `tools/` re-runs this in one command.
 **Verified on real footage:** a 10-second handheld video of 12 white scored
 caplets on a dark table (several touching, visible score lines — see
 `old/pill1.avi` in [kien-ly/count-drug](https://github.com/kien-ly/count-drug)):
-the pipeline counts **12 on all 308 frames**, and the smoother locks at 12
-within 0.25 s and holds for the whole clip. Reproduce with
-`python3 tools/eval_video.py pill1.avi 12`. This footage drove three real
+the smoother locks at 12 — the correct count — within 0.25 s, and **never
+locks at any other value** for the whole clip (momentary undercounts during
+camera shake stay in "counting…" and are never committed). Reproduce with
+`python3 tools/eval_video.py pill1.avi 12`. This footage drove several real
 fixes the synthetic suite missed (all covered by tests now): the rim-
 gradient fill gluing touching clusters, the flattening halo joining
 opposite-polarity masks, and score-line over-splitting — which is why the
 valley threshold is proportional to local brightness (contact shadows
-measure ~35–50 % of pill brightness, score grooves ~15–25 %).
+measure ~35–50 % of pill brightness, score grooves ~15–25 %), suppressed
+near specular glare, and why mask components with soft (penumbra-like)
+boundaries are rejected: physical pills always have crisp silhouettes.
 
 **Still not verified:** breadth. One real pill type, one tray, one lighting
 setup is a smoke test, not a validation. Real deployment still requires the

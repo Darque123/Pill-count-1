@@ -31,7 +31,7 @@ cv::Mat ellipseKernel(int size) {
 /// Divide grayscale by a heavily blurred copy: the tray maps to ~128
 /// regardless of lighting gradients and soft shadows.
 cv::Mat flattenIllumination(const cv::Mat& gray, const Params& p) {
-    int k = makeOdd(std::max(gray.rows, gray.cols) * p.bgBlurFraction);
+    int k = makeOdd(std::max(gray.rows, gray.cols) * p.bgSmoothFraction);
     cv::Mat bg, flat;
     cv::GaussianBlur(gray, bg, cv::Size(k, k), 0);
     cv::divide(gray, bg, flat, 128.0);
@@ -46,8 +46,13 @@ cv::Mat flattenIllumination(const cv::Mat& gray, const Params& p) {
 ///     gap networks between clustered pills;
 ///   - rings (large hole area relative to own area): the illumination-
 ///     flattening halo that surrounds a bright pill cluster on a dark tray
-///     encircles the pills, so its "holes" ARE the pills.
-void dropJunkComponents(cv::Mat& mask, double rMin) {
+///     encircles the pills, so its "holes" ARE the pills;
+///   - soft-edged blobs (median boundaryGrad along the component boundary
+///     below minBoundaryGrad): penumbra fragments of cast shadows. Physical
+///     objects have crisp silhouettes (pills measure 40-430 in gradient
+///     magnitude; shadow-edge strips 5-15).
+void dropJunkComponents(cv::Mat& mask, double rMin,
+                        const cv::Mat& boundaryGrad, int minBoundaryGrad) {
     if (cv::countNonZero(mask) == 0) return;
     cv::Mat dist;
     cv::distanceTransform(mask, dist, cv::DIST_L2, 5);
@@ -76,11 +81,23 @@ void dropJunkComponents(cv::Mat& mask, double rMin) {
             cv::Mat comp = (labels(cv::Rect(x0, y0, w, h)) == i);
             std::vector<std::vector<cv::Point>> contours;
             cv::findContours(comp, contours, cv::RETR_EXTERNAL,
-                             cv::CHAIN_APPROX_SIMPLE);
+                             cv::CHAIN_APPROX_NONE);
             cv::Mat filled = cv::Mat::zeros(comp.size(), CV_8U);
             cv::drawContours(filled, contours, -1, 255, cv::FILLED);
             int holeArea = cv::countNonZero(filled) - area;
             kill = holeArea > 0.35 * area;
+            if (!kill) {
+                std::vector<float> edge;
+                for (const auto& contour : contours)
+                    for (const cv::Point& pt : contour)
+                        edge.push_back(
+                            boundaryGrad.at<float>(pt.y + y0, pt.x + x0));
+                if (!edge.empty()) {
+                    auto mid = edge.begin() + edge.size() / 2;
+                    std::nth_element(edge.begin(), mid, edge.end());
+                    kill = *mid < minBoundaryGrad;
+                }
+            }
         }
         if (kill) {
             drop[i] = 1;
@@ -105,8 +122,20 @@ void dropJunkComponents(cv::Mat& mask, double rMin) {
 /// the opposite-polarity mask. Filtering per polarity removes them; a
 /// single unsigned mask would glue the cluster into one blob (found on real
 /// footage of white pills on a dark tray).
-cv::Mat binaryMask(const cv::Mat& bgr, const cv::Mat& flat, const Params& p) {
+cv::Mat binaryMask(const cv::Mat& bgr, const cv::Mat& gray, const cv::Mat& flat,
+                   const Params& p) {
     const cv::Size blurK(p.blurKernel, p.blurKernel);
+    // Gray-image gradient for the junk filter's silhouette-sharpness test
+    // (computed on gray, not flat, so background-estimation artifacts cannot
+    // fake sharpness).
+    cv::Mat boundaryGrad;
+    {
+        cv::Mat gblur, ggx, ggy;
+        cv::GaussianBlur(gray, gblur, cv::Size(3, 3), 0);
+        cv::Sobel(gblur, ggx, CV_32F, 1, 0, 3);
+        cv::Sobel(gblur, ggy, CV_32F, 0, 1, 3);
+        cv::magnitude(ggx, ggy, boundaryGrad);
+    }
     const double rMin =
         0.5 * std::sqrt(p.minAreaFraction * flat.total() / CV_PI);
 
@@ -133,8 +162,8 @@ cv::Mat binaryMask(const cv::Mat& bgr, const cv::Mat& flat, const Params& p) {
             cv::Mat kOpen = ellipseKernel(p.openKernel);
             cv::morphologyEx(mLight, mLight, cv::MORPH_OPEN, kOpen);
             cv::morphologyEx(mDark, mDark, cv::MORPH_OPEN, kOpen);
-            dropJunkComponents(mLight, rMin);
-            dropJunkComponents(mDark, rMin);
+            dropJunkComponents(mLight, rMin, boundaryGrad, p.minBoundaryGrad);
+            dropJunkComponents(mDark, rMin, boundaryGrad, p.minBoundaryGrad);
             cv::bitwise_or(mLight, mDark, mask);
         }
     }
@@ -149,7 +178,14 @@ cv::Mat binaryMask(const cv::Mat& bgr, const cv::Mat& flat, const Params& p) {
         double otsu = cv::threshold(sat, satMask, 0, 255,
                                     cv::THRESH_BINARY | cv::THRESH_OTSU);
         if (otsu >= p.minSaturation) {
-            dropJunkComponents(satMask, rMin);
+            // A color-only pill can be luminance-invisible; judge its
+            // silhouette sharpness in the channel that detected it.
+            cv::Mat sgx, sgy, satGrad, satBoundary;
+            cv::Sobel(sat, sgx, CV_32F, 1, 0, 3);
+            cv::Sobel(sat, sgy, CV_32F, 0, 1, 3);
+            cv::magnitude(sgx, sgy, satGrad);
+            cv::max(boundaryGrad, satGrad, satBoundary);
+            dropJunkComponents(satMask, rMin, satBoundary, p.minBoundaryGrad);
             cv::bitwise_or(mask, satMask, mask);
         }
     }
@@ -168,6 +204,13 @@ cv::Mat binaryMask(const cv::Mat& bgr, const cv::Mat& flat, const Params& p) {
         double otsu = cv::threshold(grad, edges, 0, 255,
                                     cv::THRESH_BINARY | cv::THRESH_OTSU);
         if (otsu >= p.minGradient) {
+            // Sobel/morphology border junk would otherwise close into rings
+            // that touch the frame edge and grow stalks on nearby pills.
+            const int m = p.gradCloseKernel;
+            edges.rowRange(0, m).setTo(0);
+            edges.rowRange(edges.rows - m, edges.rows).setTo(0);
+            edges.colRange(0, m).setTo(0);
+            edges.colRange(edges.cols - m, edges.cols).setTo(0);
             cv::morphologyEx(edges, edges, cv::MORPH_CLOSE,
                              ellipseKernel(p.gradCloseKernel));
             std::vector<std::vector<cv::Point>> contours;
@@ -222,10 +265,25 @@ cv::Mat markerMask(const cv::Mat& flat, const cv::Mat& mask, const Params& p) {
                      ellipseKernel(p.valleyKernel));
     cv::GaussianBlur(flat, flatBlur, cv::Size(p.blurKernel, p.blurKernel), 0);
     cv::Mat required;
-    flatBlur.convertTo(required, CV_8U, p.valleyRatio, 0.0);
+    // beta=-0.5 makes convertTo's rounding equivalent to the Python
+    // reference's floor(ratio * flat), keeping the two in lockstep.
+    flatBlur.convertTo(required, CV_8U, p.valleyRatio, -0.5);
     cv::max(required, static_cast<double>(p.valleyFloor), required);
     cv::Mat valley, out;
     cv::compare(blackhat, required, valley, cv::CMP_GE);
+    // Close small gaps where a cut tapers off (anti-aliasing, junctions):
+    // joining existing cut segments adds no new cuts, so this cannot
+    // introduce score-line over-splitting.
+    cv::morphologyEx(valley, valley, cv::MORPH_CLOSE, ellipseKernel(5));
+    // Specular glare is far brighter than any pill surface; the black-hat
+    // fires in a ring AROUND a glare spot (the ordinary pill surface is
+    // "deep" relative to the glare), which would carve a false island out
+    // of the pill. Suppress valley cuts near saturated-bright pixels.
+    cv::Mat bright;
+    cv::compare(flatBlur, 220, bright, cv::CMP_GE);
+    cv::dilate(bright, bright, ellipseKernel(p.valleyKernel));
+    cv::bitwise_not(bright, bright);
+    cv::bitwise_and(valley, bright, valley);
     cv::bitwise_not(valley, valley);
     cv::bitwise_and(mask, valley, out);
     return out;
@@ -334,12 +392,16 @@ FrameResult detectPills(const cv::Mat& bgr, const Params& p) {
     FrameResult result;
     if (bgr.empty()) return result;
 
-    // Downscale to the working resolution.
+    // Resize to the working resolution in BOTH directions: downscale large
+    // camera frames for speed, and upscale small images (capped at 5x) so
+    // kernel sizes stay proportional to pill sizes.
     double scale = std::min(
-        1.0, static_cast<double>(p.maxDimension) / std::max(bgr.cols, bgr.rows));
+        static_cast<double>(p.maxDimension) / std::max(bgr.cols, bgr.rows),
+        5.0);
     cv::Mat work;
-    if (scale < 1.0) {
-        cv::resize(bgr, work, cv::Size(), scale, scale, cv::INTER_AREA);
+    if (scale != 1.0) {
+        cv::resize(bgr, work, cv::Size(), scale, scale,
+                   scale < 1.0 ? cv::INTER_AREA : cv::INTER_CUBIC);
     } else {
         work = bgr;
     }
@@ -349,7 +411,7 @@ FrameResult detectPills(const cv::Mat& bgr, const Params& p) {
     cv::cvtColor(work, gray, cv::COLOR_BGR2GRAY);
     flat = flattenIllumination(gray, p);
 
-    cv::Mat mask = binaryMask(work, flat, p);
+    cv::Mat mask = binaryMask(work, gray, flat, p);
     cv::Mat markerSrc = markerMask(flat, mask, p);
 
     int nMarkers = 0;
@@ -383,7 +445,11 @@ FrameResult detectPills(const cv::Mat& bgr, const Params& p) {
         const cv::Rect& box = boxes[label];
         if (box.width == 0) continue;
 
-        cv::Mat region = (markers(box) == label);
+        // Clip to the foreground mask: watershed can flood a region into
+        // background it should not own (e.g. border artifacts); pixels
+        // without foreground evidence must not shape or disqualify a pill.
+        cv::Mat region;
+        cv::bitwise_and(markers(box) == label, mask(box), region);
         std::vector<std::vector<cv::Point>> contours;
         cv::findContours(region, contours, cv::RETR_EXTERNAL,
                          cv::CHAIN_APPROX_SIMPLE, box.tl());
@@ -393,6 +459,14 @@ FrameResult detectPills(const cv::Mat& bgr, const Params& p) {
             [](const auto& a, const auto& b) {
                 return cv::contourArea(a) < cv::contourArea(b);
             });
+
+        // A region touching the frame border is a clipped pill (uncountable
+        // by definition) or a morphology border artifact — never count it.
+        // App guidance: keep the whole tray in view with margin.
+        cv::Rect cbox = cv::boundingRect(contour);
+        if (cbox.x <= 1 || cbox.y <= 1 || cbox.x + cbox.width >= work.cols - 1 ||
+            cbox.y + cbox.height >= work.rows - 1)
+            continue;
 
         double area = cv::contourArea(contour);
         if (area < minArea || area > maxArea) continue;
