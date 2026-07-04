@@ -1,0 +1,14 @@
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+*.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+# Python
+__pycache__/
+*.pyc
+
+# Test output (regenerate with tools/test_synthetic.py)
+tools/out/
+tools/cpp_test/pill_test
